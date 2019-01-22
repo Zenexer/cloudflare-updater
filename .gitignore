@@ -1,0 +1,32 @@
+.cloudflare.cfg
+config.yaml
+.cache.yaml
+
+# Generic
+*~
+~*
+Thumbs.db
+desktop.ini
+._*
+.DS_Store
+__MACOSX/
+*.tmp
+*.bak
+*.swp
+*.old
+*.undo
+*.cache
+tmp
+bak
+swp
+old
+undo
+cache
+
+# IDEs
+.idea/
+.vscode/
+
+# Python
+*.py[cod]
+venv/

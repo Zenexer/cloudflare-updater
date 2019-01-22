@@ -1,0 +1,58 @@
+# Copy this file to config.yaml and update it appropriately.  It's YAML, so indentation is important; don't use tabs!
+
+settings:
+  dry_run:          false  # Will perform a dry run.  Data will be retrieved from Cloudflare, but nothing will be changed.
+  api_batch_size:   null   # The script has to request data in pages; this determines the page size.  null defaults to 100.
+  cloudflare_email: null   # Cloudflare email.  null will pull it from .cloudflare.cfg.
+  cloudflare_token: null   # Cloudflare API token.  null will pull it from .cloudflare.cfg.
+
+groups:
+  # Each group contains a list of records and a list of domains.  All domains in the group will receive the same set of
+  # DNS records.
+
+  - records:  # The DNS records that will be applied to the group.
+      - name:     '@'                # Required.  Subdomain, or @ to add the record to the root domain.
+        type:     A                  # Required.  Record type.  Common types: A, AAAA, CNAME, TXT, MX
+        content:  '127.0.0.1'        # Required.  Value for the record.  This is a Python format string; {zone.name} will be replaced with the zone name (root domain name).
+        proxied:  true               # Optional.  Whether to use the Cloudflare HTTP proxy.
+        ttl:      auto               # Optional.  TTL for the record, or auto for automatic.  1 is the same as auto.
+
+      - name:     '@'
+        type:     MX
+        content:  'mail.{zone.name}' # {zone.name} will be replaced with the domain name.
+        ttl:      3600
+        priority: 10                 # Some record types, such as MX, require a priority.
+
+      - name:     'www'
+        type:     CNAME
+        content:  '{zone.name}'      # {zone.name} will be replaced with the domain name.
+        proxied:  true
+        ttl:      auto
+
+      - name:     '*'                # Wildcards are support.
+        type:     TXT
+        content:  'v=spf1 -all'
+        ttl:      3600
+
+      - name:     'mail'
+        type:     A
+        content:  '127.0.0.1'
+        proxied:  false
+        ttl:      3600
+
+    domains:  # List of zones (domain names) that will have DNS records listed above.
+      - alpha.example
+      - beta.example
+      - gamma.example
+
+  # Multiple groups are supported:
+
+  - records:
+    # ...
+    domains:
+    # ...
+
+  - records:
+    # ...
+    domains:
+    # ...
