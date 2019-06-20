@@ -1,8 +1,7 @@
 #!python3
 from abc import ABC
-from dataclasses import dataclass, field
 from typing import cast, Optional, Dict, Any, Union, List, Collection, Set, Tuple, Hashable, FrozenSet, NamedTuple, \
-    Generator, Iterator, overload, TypeVar, Generic
+    Generator, Iterator, overload, TypeVar, Generic#, Literal -- needs Python 3.8
 from argparse import ArgumentParser, Namespace
 from CloudFlare import CloudFlare
 import yaml
@@ -73,7 +72,7 @@ class FrozenSetImpl(ABC, Generic[T], Collection[T]):
         pass
 
     @overload
-    def __contains__(self, x: Any) -> False:
+    def __contains__(self, x: Any) -> bool: # Literal[False]: -- requires Python 3.8
         pass
 
     def __contains__(self, x: object) -> bool:
@@ -93,25 +92,24 @@ class ApiZone(Hashable):
         self.id   = str(data['id'])
         self.name = str(data['name']).strip('.').lower()
 
-    def __hash__(self) -> hash:
+    def __hash__(self) -> int:
         return hash(self.id)
 
-    def __eq__(self, other):
-        return type(other) == type(self) and other.id == other.name
+    def __eq__(self, other) -> bool:
+        return other is not None and type(other) == type(self) and other.id == other.name
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"zone {self.name} ({self.id})"
 
 
-@dataclass(init=False, eq=True)
 class Record(ABC, Hashable):
-    name:     str                   = field()
-    type:     str                   = field()
-    content:  str                   = field()
-    keys:     FrozenSet[RecordKey]  = field(compare=False)
-    ttl:      Optional[int]         = field(default=None)
-    priority: Optional[int]         = field(default=None)
-    proxied:  Optional[bool]        = field(default=None)
+    name:     str
+    type:     str
+    content:  str
+    keys:     FrozenSet[RecordKey]
+    ttl:      Optional[int]         = None
+    priority: Optional[int]         = None
+    proxied:  Optional[bool]        = None
 
     def __init__(self, data: ConfigRecordData) -> None:
         self.name     = str(data['name']).strip('.').lower()
@@ -133,9 +131,16 @@ class Record(ABC, Hashable):
     def __str__(self) -> str:
         return f"{self.name} {self.type} {self.content}"
 
+    def _members(self) -> tuple:
+        # self.keys is deliberately omitted here
+        return (self.name, self.type, self.content, self.ttl, self.priority, self.proxied)
+
+    def __eq__(self, other) -> bool:
+        return other is not None and type(other) == type(self) and self._members() == other._members()
+
 
 class ConfigRecord(Record):
-    _hash: hash
+    _hash: int
 
     def __init__(self, data: ConfigRecordData) -> None:
         super().__init__(data)
@@ -148,7 +153,7 @@ class ConfigRecord(Record):
         self.keys  = frozenset({key})
         self._hash = hash(key)
 
-    def __hash__(self) -> hash:
+    def __hash__(self) -> int:
         return self._hash
 
     def get_content_for_zone(self, zone: ApiZone) -> str:
@@ -207,17 +212,17 @@ class ApiRecord(Record):
 
         self.keys = frozenset(keys)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(self.id)
 
-    def __eq__(self, other):
-        return other is not None and type(other) == type(self) and other.id == self.id
+    def _members(self) -> tuple:
+        return (self.id, )
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{super().__str__()} ({self.id})"
 
     def get_generic_content(self) -> str:
-        return self.name \
+        return self.content \
             .replace('{', '{{') \
             .replace('}', '}}') \
             .replace(self.zone.name, '{zone.name}')
@@ -236,7 +241,7 @@ class ApiRecord(Record):
         if o.type != self.type or o.get_name_for_zone(self.zone) != self.name:
             return False
 
-        if o.get_content_for_zone(self.zone) != o.content:
+        if o.get_content_for_zone(self.zone) != self.content:
             return False
 
         if o.ttl is not None and o.ttl != self.ttl:
@@ -277,8 +282,8 @@ class Group:
     domains: DomainCollection
 
     def __init__(self, data: ConfigGroupData) -> None:
-        self.records = RecordCollection(data['records'])
-        self.domains = DomainCollection(data['domains'])
+        self.records = RecordCollection(cast(ConfigRecordCollectionData, data['records']))
+        self.domains = DomainCollection(cast(ConfigDomainCollectionData, data['domains']))
 
 
 class GroupCollection(List[Group]):
@@ -305,10 +310,10 @@ class Config:
 
     def __init__(self, config_file: Optional[str] = None) -> None:
         with open(config_file or 'config.yaml', 'r') as f:
-            data: ConfigData = yaml.load(f)
+            data: ConfigData = yaml.safe_load(f)
 
-        self.settings = cast(ConfigSettingsData,        Settings(data['settings']))
-        self.groups   = cast(ConfigGroupCollectionData, GroupCollection(data['groups']))
+        self.settings = Settings(cast(ConfigSettingsData, data['settings']))
+        self.groups   = GroupCollection(cast(ConfigGroupCollectionData, data['groups']))
 
 
 class ApiZoneCollection(FrozenSetImpl[ApiZone]):
@@ -329,17 +334,19 @@ class ApiRecordCollection(FrozenSetImpl[ApiRecord]):
 
 
 class Updater:
-    config:  Config
-    debug:   bool
-    dry_run: bool
-    cf:      CloudFlare
-    cache:   Dict[str, Any]
+    config:    Config
+    debug:     bool
+    dry_run:   bool
+    verbosity: int
+    cf:        CloudFlare
+    cache:     Dict[str, Any]
 
-    def __init__(self, config_file: Optional[str] = None, debug: bool = False) -> None:
-        self.config  = Config(config_file)
-        self.debug   = debug
-        self.dry_run = debug or self.config.settings.dry_run
-        self.cf      = CloudFlare(
+    def __init__(self, config_file: Optional[str] = None, dry_run: bool = False, debug: bool = False, verbosity: int = 0) -> None:
+        self.config    = Config(config_file)
+        self.debug     = debug
+        self.dry_run   = dry_run or debug or self.config.settings.dry_run
+        self.verbosity = verbosity
+        self.cf        = CloudFlare(
             raw=True,
             email=self.config.settings.cloudflare_email,
             token=self.config.settings.cloudflare_token,
@@ -357,8 +364,8 @@ class Updater:
             params['page'] += 1
 
             raw:         ApiRawResult  = api.get(*args, params=params, **kwargs)
-            result:      ApiResult     = raw['result']
-            result_info: ApiResultInfo = raw['result_info']
+            result:      ApiResult     = cast(ApiResult, raw['result'])
+            result_info: ApiResultInfo = cast(ApiResultInfo, raw['result_info'])
 
             full_result += result
             total_pages  = result_info['total_pages']
@@ -369,10 +376,12 @@ class Updater:
         return ApiZoneCollection(self.get_all(self.cf.zones))
 
     def get_records(self, zone: ApiZone) -> ApiRecordCollection:
+        data: ApiRecordCollectionData
+
         if zone.id in self.cache:
-            data: ApiRecordCollectionData = self.cache[zone.id]
+            data = self.cache[zone.id]
         else:
-            data: ApiRecordCollectionData = self.get_all(self.cf.zones.dns_records, zone.id)
+            data = self.get_all(self.cf.zones.dns_records, zone.id)
             self.cache[zone.id] = data
 
         return ApiRecordCollection(data, zone)
@@ -383,47 +392,58 @@ class Updater:
         except KeyError:
             pass
 
+    def get_action(self, not_dry_run: str, dry_run: str) -> str:
+        if self.dry_run:
+            return dry_run
+        else:
+            return not_dry_run
+
     def update_record(self, zone: ApiZone, old_record: ApiRecord, new_record: ConfigRecord) -> None:
         data: ConfigRecordData = new_record.get_api_data(zone)
 
-        if self.dry_run:
-            print(f"DRY-RUN Update record {old_record.name} ({old_record.id}) in {zone}: {data!r}")
-        else:
+        self.log(0, f"{self.get_action('Updating', 'Would update')} record for {zone}: from {old_record} to {new_record}")
+
+        if not self.dry_run:
             self.invalidate_cache(zone)
-            # self.cf.zones.dns_records.put(zone.id, old_record.id, data=data)
+            self.cf.zones.dns_records.put(zone.id, old_record.id, data=data)
 
     def delete_record(self, zone: ApiZone, record: ApiRecord) -> None:
-        if self.dry_run:
-            print(f"DRY-RUN Delete record in {zone}: {record}")
-        else:
+        self.log(0, f"{self.get_action('Deleting', 'Would delete')} record for {zone}: {record}")
+
+        if not self.dry_run:
             self.invalidate_cache(zone)
-            # self.cf.zones.dns_records.delete(zone.id, record.id)
+            self.cf.zones.dns_records.delete(zone.id, record.id)
 
     def create_record(self, zone: ApiZone, record: ConfigRecord) -> None:
         data: ConfigRecordData = record.get_api_data(zone)
-        if self.dry_run:
-            print(f"DRY-RUN Create record in {zone}: {data!r}")
-        else:
-            self.invalidate_cache(zone)
-            # self.cf.zones.dns_records.post(zone.id, data=data)
 
-    def load_cache(self):
+        self.log(0, f"{self.get_action('Creating', 'Would create')} record for {zone}: {record}")
+
+        if not self.dry_run:
+            self.invalidate_cache(zone)
+            self.cf.zones.dns_records.post(zone.id, data=data)
+
+    def load_cache(self) -> None:
         try:
             with open('.cache.yaml', 'r') as f:
-                self.cache = yaml.load(f)
+                self.cache = yaml.safe_load(f)
         except FileNotFoundError:
             self.cache = dict()
 
-    def save_cache(self):
+    def save_cache(self) -> None:
         with open('.cache.yaml', 'w') as f:
             yaml.dump(self.cache, f)
 
-    def run(self):
+    def log(self, verbosity: int, message: str) -> None:
+        if self.verbosity >= verbosity:
+            print(message)
+
+    def run(self) -> None:
         if not self.config.groups:
-            print("Warning: no groups in config file; doing nothing")
+            self.log(-1, "Warning: no groups in config file; doing nothing")
             return
 
-        print("Loading cache")
+        self.log(2, "Loading cache")
         self.load_cache()
 
         managed_domains: Set[str] = set()
@@ -433,63 +453,67 @@ class Updater:
                 domain = domain.strip('.').lower()
 
                 if domain in managed_domains:
-                    print(f"Error: Domain {domain} appears multiple times in the config.")
+                    self.log(-2, f"Error: Domain {domain} appears multiple times in the config.")
                     return
 
                 managed_domains.add(domain)
 
-        print("Retrieving zones")
+        self.log(2, "Retrieving zones")
         zones: ApiZoneCollection = self.get_zones()
 
         if not zones:
-            print("Warning: no zones in Cloudflare account; doing nothing")
+            self.log(-1, "Warning: no zones in Cloudflare account; doing nothing")
             return
 
-        print("Retrieving DNS records for zones")
+        self.log(2, "Retrieving DNS records for zones")
         zone_records: Dict[ApiZone, ApiRecordCollection] = {}
-        for zone in zones:
-            if zone.name in managed_domains:
-                print(f"Retrieving DNS records for {zone}")
-                zone_records[zone] = self.get_records(zone)
+        for z in zones:
+            if z.name in managed_domains:
+                self.log(2, f"Retrieving DNS records for {z}")
+                zone_records[z] = self.get_records(z)
             else:
-                print(f"Skipping {zone} because it doesn't appear in any groups.")
+                self.log(0, f"Skipping {z} because it doesn't appear in any groups.")
+
+        domains_are_missing: bool = False
 
         for group in self.config.groups:
-            print("Starting group")
+            self.log(2, "Starting group")
 
             for domain in group.domains:
                 zone: Optional[ApiZone] = zones.by_name(domain)
 
                 if zone is None:
-                    print(f"Error: Domain {domain} isn't in Cloudflare.")
+                    domains_are_missing = True
+                    self.log(-2, f"Error: Domain {domain} isn't in Cloudflare.")
                     return
 
-                records: ApiRecordCollection = zone_records[zone]
-                found:   Set[ConfigRecord]   = set()
+                if not domains_are_missing:
+                    api_records: ApiRecordCollection = zone_records[zone]
+                    found:       Set[ConfigRecord]   = set()
 
-                for record in records:
-                    match: Optional[ConfigRecord] = group.records.match(record)
+                    for api_record in api_records:
+                        match: Optional[ConfigRecord] = group.records.match(api_record)
 
-                    if match is None:
-                        print(f"Deleting record for {zone}: {record}")
-                        self.delete_record(zone, record)
-                    elif record.satisfies(match):
-                        print(f"Leaving record for {zone}: {record}")
-                        found.add(match)
-                    else:
-                        print(f"Updating record for {zone}: {record}")
-                        self.update_record(zone, record, match)
-                        found.add(match)
+                        if match is None:
+                            self.delete_record(zone, api_record)
+                        elif api_record.satisfies(match):
+                            self.log(1, f"Leaving record for {zone}: {api_record}")
+                            found.add(match)
+                        else:
+                            self.update_record(zone, api_record, match)
+                            found.add(match)
 
-                for record in group.records:
-                    if record not in found:
-                        print(f"Creating record for {zone}: {record}")
-                        self.create_record(zone, record)
+                    for config_record in group.records:
+                        if config_record not in found:
+                            self.create_record(zone, config_record)
 
-        print("Saving cache")
+        if domains_are_missing:
+            return
+
+        self.log(2, "Saving cache")
         self.save_cache()
 
-        print("Done.")
+        self.log(0, "Done.")
 
 
 def main():
@@ -501,22 +525,20 @@ def main():
     )
     parser.add_argument(
         '-v', '--verbose',
-        name='verbosity',
-        type=int,
         action='count',
+        default=0,
+        dest='verbosity',
         help="increase output verbosity",
     )
     parser.add_argument(
         '-n', '--dry-run',
-        name='dry_run',
-        type=bool,
+        dest='dry_run',
         action='store_true',
         help="retrieve data from Cloudflare for processing and describe actions that would be taken, but don't submit "
              "any changes",
     )
     parser.add_argument(
         '-d', '--debug',
-        type=bool,
         action='store_true',
         help="only useful during development; implies --dry-run",
     )
@@ -524,7 +546,7 @@ def main():
 
     updater: Updater = Updater(
         config_file=args.config,
-        debug=True,
+        debug=args.debug,
         verbosity=args.verbosity,
         dry_run=args.dry_run,
     )
