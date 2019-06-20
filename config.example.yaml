@@ -29,7 +29,7 @@ groups:
         proxied:  true
         ttl:      auto
 
-      - name:     '*'                # Wildcards are support.
+      - name:     '*'                # Wildcards are supported.
         type:     TXT
         content:  'v=spf1 -all'
         ttl:      3600
