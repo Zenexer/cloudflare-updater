@@ -10,9 +10,9 @@ groups:
   # Each group contains a list of records and a list of domains.  All domains in the group will receive the same set of
   # DNS records.
   #
-  # Domains should only ever be in a single group.  Records found on Cloudflare but not in a domain's group will be
-  # deleted, so if a domain is in multiple groups, they'll fight for dominance.  (The last group processed will win, but
-  # you'll end up rate limited pretty quickly.)
+  # Any given domain should only ever be in a single group.  Records found on Cloudflare but not in a domain's group will
+  # be deleted, so if a domain is in multiple groups, they'll fight for dominance.  (The last group processed will win,
+  # but you'll end up rate limited pretty quickly.)
 
   - records:  # The DNS records that will be applied to the group.
       - name:     '@'                # Required.  Subdomain, or @ to add the record to the root domain.
